@@ -4,7 +4,7 @@ The following project replicates the backend functionality of well-known statist
 
 # Files
 
-This GitHub repository contains two files that account for the general project: the RMD and HTML file that explains the interpretability and replication of the project, as well as the results and overall objectives.
+This GitHub repository contains two files that account for the general project: the RMD and HTML file that explains the interpretability and replication of the project, as well as the results and overall objectives. Also, the code to generate the Shiny App explained in the next section is available.
 
 # Shiny App
 
