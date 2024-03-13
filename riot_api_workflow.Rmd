@@ -1,0 +1,1204 @@
+---
+title: "League Of Data Harvesting"
+author: "Bernard Banyuls & Alejandro Saavedra"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+## Introduction 
+
+The following project tries to replicate the back-end processes that well-known webpages in the League Of Legends community such as [League Of Graphs](https://www.leagueofgraphs.com/es/summoner/euw/Zenki-1310) and [Lolalytics](https://lolalytics.com/lol/tierlist/) that serve different purposes each, one to show statistics regarding users and the other regarding statistics of champions & items.
+
+The workflow is as follows: 
+
+* API key setup 
+
+* Obtaining usernames per tier and division
+
+* Obtaining latest matches of users
+
+* Obtaining Match Information (End_Game Results)
+
+* Obtaining Timeline Match Information (Game_Events)
+
+To give a little bit of context, League of Legends is a multiplayer online battle arena (MOBA) game in which the player controls a character ("champion") with a set of unique abilities from an isometric perspective. As of 2023, there are over 160 champions available to play.
+
+
+Riot Games (the parent company), allow developers to access game data in a secure and reliable way through the [Riot Developer Portal](https://developer.riotgames.com/) in which we can obtain all the endpoints available, detailed information about the data obtained among other inquiries developers may have.
+
+The different objectives we propose among the project have a different flow in terms of endpoints as a way to use as many of the endpoints available. Although before going straight into the objectives and the diverse flows, first we need to set the API key and a common to call the endpoint.
+
+## API Key Setup
+
+The libraries that will be used across the project are the ones shown below.
+```{r,output = FALSE, warning=FALSE, message=FALSE}
+library(httr)
+library(jsonlite)
+library(data.table)
+library(stringr)
+library(tidyverse) 
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(gganimate)
+library(transformr)
+library(ggpubr)
+library(magick)
+library(ggplot2)
+library(ggimage)
+library(cowplot)
+library(jpeg)
+library(shiny)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+```
+
+
+The API Key Setup and the main idea/way to access the data of the endpoints is based on the work done by Reddit user "WallabyKingdom" whose work can be seen (here)[https://rpubs.com/WallabyKingdom/riot-api]. The date of the work dates approximately three years ago, in which the endpoints of the Riot Developer Portal have changed and updated in recent years mainly going from the fourth version to the fifth one as can be seen in the names of the endpoints, as well as username names and ids have been unified across the different video games Riot Games own, information about this change can be seen (here)[https://darkintaqt.com/blog/ids] although through the work the process will be explained.
+
+
+The following formula is the one mentioned above and the idea is to serve as a common point to obtain the data of the different endpoints. The main reason why the API Key is shown and not encoded in an .env environment is that it expires every 24 hours and needs to be updated through the Riot Developer Portal, which can be accessed by the link above, and to obtain a Personal API Key a user needs to be created.
+
+There are two different types of API Keys which as stated in the Riot Developer Portal are the following:
+
+* Personal keys are meant for smaller-size, personal projects, such as testing the API, products for yourself and a small group, or for creating prototypes to later submit for a production key
+
+* Production keys are meant for larger-size, professional projects. For production keys, we need to see a functioning website/application or a prototype that demonstrates you’ll be able to fully execute on your use case.
+
+
+The rate limit for a personal keys is by design very limited:
+
+* 20 requests every 1 second
+* 100 requests every 2 minutes
+
+
+```{r}
+riot_api_fetching <- function(x) {
+  key <- "RGAPI-8e3a4174-deeb-4036-8625-7c8d6d7e042a"
+  url <- paste0(x, key)
+  json <- GET(url = url)
+  raw <- rawToChar(json$content)
+  fromJSON(raw)
+}
+
+
+delimiter <- "?api_key="
+delimiter2 <- "&api_key="
+```
+
+Overall information about the different endpoints can be seen (here)[https://developer.riotgames.com/apis]. The workflow we did throughout the project, is to analyze how the endpoint works manually in the webpage, replicate for one instance in R, and then develop for a small set of data, and finally with a large size of data to ensure there are no errors.
+
+It is important to notice that the current performance and availability of the endpoints can be checked (here)[https://developer.riotgames.com/api-status/]. Throughout the development of the project we have had issues with the service being down or new API keys not working as intended.
+
+Although these issues persisted for several days, the issues are isolated, and the information obtained from matches or user accounts give no problems outside the ones fixed manually. That is to say, there may be problems regarding Response Errors although if they occur they appear globally rather than in specific matches or account usernames information. For that matter the errors encountered are regarding the data obtained not regarding the acquisition of the data.
+
+Regarding the second issue with the renewal of API Keys, during the weekend of the 9th and 10th of March once an API Key expired the renovation did not work, in that instance (DarkIntaqt)[https://github.com/DarkIntaqt] the creator of (YearInLOL)[https://yearin.lol/] helped us by providing a working API Key during the time the issue was happening as can be seen (here)[https://github.com/RiotGames/developer-relations/issues/900].
+
+## Obtaining Matches per rank
+
+In League Of Legends, there are ranked matches in which players compete within each other in a ranking. This ranking to show difference across players instead of using just a Number Ranking or "Elo" as Chess.com does. In this case players are separated between ranks and divisions, and from the "Elo" rating they place in one or another. In the following (section)[https://www.leagueofgraphs.com/rankings/rank-distribution] of the Leagueofgraphs webpage can be seen the distribution of players across ranks to visualize differences of skill level depending on the tier.
+
+There are two ways in which we can obtain the information of the matches using the API, we either have to manually say the username(s) we want to analyze matches from, or we can indicate through one of the endpoints a tier and division to obtain usernames that belong to that rank.
+
+
+The following code section will allow us to iteratively analyze all the ranks and divisions without having to change the final endpoint of the section as will be explained later.
+
+It is important to notice that the following tiers are not all the tiers that exist as higher tiers that containing 0.5% of the player base have their own endpoint as they are the TOP 0.5% players in that region.
+
+
+```{r}
+tier <- c("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND")
+division <- c("IV", "III", "II", "I")
+
+combinations_df <- expand.grid(division, tier)
+combinations_list <- list()
+for (i in seq_len(nrow(combinations_df))) {
+  combinations_list[[i]] <- combinations_df[i, ]
+}
+
+```
+
+The following call of the endpoint is done in this way:
+
+```{r}
+accounts <- lapply(combinations_list, function(x) {
+  Sys.sleep(1.3)
+  division <- x[1, 1]
+  tier <- x[1, 2]
+  print(x)
+  return(riot_api_fetching(
+    paste0("https://euw1.api.riotgames.com/lol/league/v4/entries/RANKED_SOLO_5x5/", tier, "/",  division, "?page=1", delimiter2)))
+})
+
+```
+
+In which we get the accounts that are in the first page of data available across the combination of tier and divisions possible, that is to say, Iron 1, Iron 2, Iron 3, etc...
+
+
+As the endpoint gives us all the accounts for the first page of data available, we have to manually filter the amount we want per division, that is to say if we put 50 as the default value, we will 200 per rank (four divisions per rank) and a total of 1400 accounts. It is important to notice that in some cases the summonerName obtained may be empty (again, this is an error on how the data obtained is shown rather than obtaining the data) for that matter a simple filtering have been applied. 
+
+Throughout the projects as we were working with a huge dataset of IDs to obtain a considerable amount of matches, as we have to run the code through night as it took 5-6 hours per endpoint at some point due to the request limits as can be seen in the Sys.sleep which allow us to stop the code from running to ensure we are in the limits (if we were to not respect this, we would get an Http status error code implying we have no authorization or any issue is happening).
+
+Although it is not shown, we analyzed if the empty usernames and errors were systematic or random in which we the result was that there errors were not systematic and there were no relationship regarding when they occurred. For that matter as the errors were not regarding obtaining the data and it was how the data was shown later as it gave us problems trying to join vectors, lists into a dataframe we had to manually modify and implement return(null) for certain conditions. In this endpoint we did not have to do nothing like as the only errors would be usernames being empty and it did not give any problem binding the rows.
+
+```{r}
+accounts_per_divison <- 1 #change this number to decide how many players per division to be analyzed or get information from
+ 
+for (i in seq_along(accounts)) {
+accounts[[i]] <- accounts[[i]][seq_len(accounts_per_divison), ]
+}
+
+full_accounts <- do.call(bind_rows, accounts)
+
+
+
+names <- str_remove_all(full_accounts$summonerName, " ")
+
+
+head(full_accounts|> select(tier, rank, summonerName, leaguePoints, wins, losses), n = 5)
+```
+
+As we can observe full_accounts is a dataframe of 1400 observations(players) in which we have general information about tier, rank, how many wins, how many losses, the LeaguePoints, among others.
+
+In this case we only need the summonerName to continue, for that matter we get the vector of names that we will use to obtain the IDs of their recent matches. 
+
+```{r}
+counter <- 0
+
+add <- lapply(names, function(x) {
+  
+  counter <<- counter + 1 
+  
+  if (nchar(x) == 0) {
+    return(NULL)
+  }
+  summoner <- riot_api_fetching(paste0("https://euw1.api.riotgames.com/lol/summoner/v4/summoners/by-name/", x, delimiter))
+  
+  acc_id <- summoner$puuid
+
+    if (counter %% 10 == 0) {
+    print(paste(counter, "/", length(names), "@", format(Sys.time(), "%H:%M:%S")))
+  }
+  
+  
+  Sys.sleep(1.3)
+  return(acc_id)
+})
+```
+
+As mentioned above, as we worked on a large list of names, we have the counter, and inside the anonymous function a print counter if divided by 10 gives a zero, to visualize how many names are remaining in terms of obtaining the data. For example if we had 1400 accounts if we have 50 per division, we would be shown this:
+
+"10 / 1400 @ 18:58:47"
+
+As a way to analyze when an error occured we used sink() to then filter the list so it contains the summonerName that gave an error, although it is important to notice that in some cases when we filtered the list to contain the error it did not give an error whereas if we had the entire list it did. 
+
+That is why we included the following in the API call so it gave no erros throughout the endpoint calling or later on joining the information obtained. 
+
+```{r, eval=F, echo=T}
+if (nchar(x) == 0) {
+    return(NULL)
+  }
+```
+
+
+As mentioned at the start of the project, recently the way the IDs work throughout RiotGames changed, for that matter the most important ID is the puuid which we obtained with the endpoint above and will be used to obtain the IDs of the matches that are only accessible using the puuid rather than the summonerName as the summonerName can be easily changed (withing paid ingame currency, or free ingame currency obtained) for that matter the puuid serves as an ID that does not change even if the summonerName changes.
+
+The following section analyzes the cases in which the vector obtained in the previous endpoint is empty or not, as even though there were no problems obtaining the data, if we wanted to join the data using bind it would give us problems as some of them were empty.
+
+```{r}
+non_empty <- vector()
+
+for (i in seq_along(add)) {
+  non_empty[i] <- !(is.null(add[[i]]))
+}
+
+
+to_add <- do.call(rbind, add)
+
+
+full_accounts2 <- full_accounts |>  filter(non_empty) |> cbind(to_add) |> rename(acc_id = to_add)
+
+
+head(full_accounts2 |> select(tier, rank, summonerName, leaguePoints, wins, losses)) #only some of the variables are shown for aesthetic purposes
+```
+
+Once we have filtered the accounts in which we do not have a puuid (empty vector), we join the accounts id (puuid) to the full_accounts dataframe obtained previously.
+
+
+Now to obtain data about the recent matches of our players, we first have to get a list of the accounts ids (puuid) in order to call the endpoint.
+```{r}
+acc_ids <- as.character(full_accounts2$acc_id)
+```
+
+
+The following code is to set the information we want to obtain from the endpoint, the query parameters (they are optional), the path parameter would be the puuid.
+
+Queue equal to 420 implies we only want information about the Ranked matches. The json containing the information of the IDs of the queue can be seen (here)[https://static.developer.riotgames.com/docs/lol/queues.json]. Static information about champions, runes, items, queue ids, among other variables of interest outside of users and matches can be seen (here)[https://developer.riotgames.com/docs/lol] in detail.
+
+```{r}
+queue <- "420" 
+start <- "0"
+count <- "1" #change this depending on how many matches per player you want
+```
+
+
+The following API call will give us the matches ID used in a following step. As we want to obtain the match_id and the puuid from which we obtained the match_id from this anonymous function differs from the previous ones.
+
+```{r}
+counter <- 0
+
+matchestotal <- lapply(acc_ids, function(x) {
+  counter <<- counter + 1
+  
+  
+  matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", x, "/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+  
+  if (is.null(matches)) {
+    return(NULL)  
+  }
+  
+  if (counter %% 10 == 0) {
+    print(paste(counter, "/", length(acc_ids), "@", format(Sys.time(), "%H:%M:%S")))
+  }
+  
+  Sys.sleep(1.3)
+  
+  return(list(acc_id = x, matches = matches))
+})
+
+matches_df  <- do.call(rbind, lapply(matchestotal, as.data.frame))
+
+head(matches_df)
+```
+
+Again, in case we wanted to obtain more matches, we would have to change the count variable in the previous section. The following step will be to obtain the information about each match we want to analyze. The problem this section gave us was regarding obtaining the matches_id and the corresponding puuid. The importance of having the puuid is to show which tier and division this match originally came from as due to having ten players in each match, they do not have all the same rank. LeagueOfLegends uses an "invisible" rank called MMR in which although their visual rank do not match, they are placed in the same match as they are close to in terms of their "invisible" rank. That is to say, if a "new" player which is someone that has previously played or is using a secondary account starts playing the game is able to recognize him and put him against higher rank players if the game considers his abilities to correspond that rank, although his rank at first does not show that the game internally knows and places him in "higher rank matches".
+
+
+```{r}
+merged_data <- merge(matches_df, full_accounts2, by = "acc_id") |> select(matches, tier, rank)
+
+matchestotallist <- matches_df$matches
+```
+
+
+First we have merged_data in which we have the matches_id, the tier and rank their correspond to. The following step is to obtain a list of all the matches we want to analyze in order to go through them in the following endpoint.
+
+```{r}
+counter <- 0
+
+
+matchestotal <- lapply(matchestotallist, function(x) {
+  
+  counter<<- counter + 1 
+  
+  if (nchar(x) == 0) {
+    return(NULL)  
+  }
+  apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+  
+  
+  if (counter %% 10 == 0) {
+    print(paste(counter, "/", length(matchestotallist), "@", format(Sys.time(), "%H:%M:%S")))
+  }
+  
+  if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+    infomatch <- apibranch$info$participants
+    parts <- apibranch$metadata$participants
+    bind1 <- cbind(infomatch,parts)
+    duration <- apibranch$info$gameDuration
+    bind2 <- cbind(duration, bind1)
+    euwmatch <- apibranch$metadata$matchId 
+    bind3 <- cbind(euwmatch,bind2)
+    Sys.sleep(1.4)
+    return(bind3)
+  } else {
+    return(NULL) 
+  }
+})
+
+
+matchestotal_df <- bind_rows(matchestotal)
+
+head(matchestotal_df |> select(euwmatch, duration, teamPosition, summonerName, teamId, win), n =10) #only some of the total variables were shown for aesthetic purposes
+
+
+```
+
+This section had more errors as can be seen in the return(NULL) and the !is.null used in the function, and we have to manually call the different parts of the JSON archive obtained in order to get a clean dataframe that contains the matchID, gameDuration, the participants and the overall information of the match. The information of the ID, duration and participants is saved in the different vectors in the JSON that is why we have to manually add them to a dataframe we created.
+
+This dataframe can be joined to the merged_df we had with the tier and rank as a way to analyze differences across divisions, win rate of items and champions across divisions, as well as performing classification models to understand which variables matter the most in terms of getting the victory!
+
+Although this endpoint was used to get data about matches, there is another endpoint that allow us to get information throughout the duration of the game, that is to say obtain information regarding the different events that occur throughout a match (kills, towers taken, objectives taken, wards placed, among others).
+
+
+## Death Coordinates Plot
+
+Another one of the objectives we had is analyzing a heat map in terms of where deaths occur across the map. It is important to notice that to analyze this, we need to have a large sample of matches in order to be able to represent accordingly the data.
+
+```{r}
+counter <- 0
+
+timeline <- lapply(matchestotallist, function(x) {
+  counter <<- counter + 1  
+  
+  timelineapi <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x,"/timeline", delimiter))
+
+  
+    if (is.null(timelineapi$info$frames$events)) {
+    return(NULL) 
+    }
+  
+    if (timelineapi$info$gameId == 0) {
+    return(NULL)
+  }
+  
+    # Print progress message every 10th iteration
+  if (counter %% 10 == 0) {
+    print(paste(counter, "/", length(matchestotallist), "@", format(Sys.time(), "%H:%M:%S")))
+  }
+  
+  frame_df <- timelineapi$info$frames
+  gameId <- timelineapi$info$gameId
+  
+  events <- frame_df |> 
+    pull(events) |> 
+    map_df(as.data.frame) |> 
+    mutate(gameId = timelineapi$info$gameId)
+  
+  Sys.sleep(1.3)
+  
+  return(events)
+})  
+
+matchestimeline <- bind_rows(timeline)
+```
+
+
+In this case more errors before obtaining all the data occurred, in this case we had to remove "_info_frames_events" that were null and "info_gameId == 0". The symbol _ has been used as dollar sign in order to not have problems of syntax in the html file.
+
+One of the main issues we had is how R works as the data obtained at first looked fine until what we got converting the data to df at first was that the first column each row was a dataframe.
+
+We had problems trying to get the data as a dataframe for all the matches as each row in that column the dataframes did not have the same columns shape information and gave a lot of problems until we found in a korean forum a user that in Python was able to get the data simple as that. Although in Python was easier was getting the data of that column in R implied "losing" the other columns in the main dataframe was we do not need them for our project and research we did not mind at all, as we saw on the internet is that R considers everything a vector and gave a lot of problems trying to fix that. Although as we only wanted to get the type of event (in this case, kill event) and it x-y coordinates the rest did not matter. Mainly was information about which champion did the kill, etc...
+
+The way we fixed it was using pull as explained in the [korean personal blog](https://velog.io/@liveandletlive/3.-%EC%9C%A0%EC%A0%80%EC%9D%98-%EC%9D%B4%EB%8F%99%EA%B2%BD%EB%A1%9C) of @chaechae user.
+
+The continuation of this section will not be replicated in this Rmd as in order to work we need a large dataset in order to plot correctly the density map. We have already ran it with 15000 matches and it took 7 hours of running the code to obtain it and the results will be shown in their own section and the class presentation.
+
+
+```{r, eval=F, echo=T}
+mapacalor <- matchestimeline |> 
+    filter(type == "CHAMPION_KILL") |> 
+  select(timestamp, position, gameId)
+
+head(mapacalor)
+```
+
+As we can observe in this case the dataframe is really simple, we observe the timestamp (to get the minutes we have to divide by 60000), the position and gameId in case we wanted to filter the data by tier and rank we would do it by joining this df with the one that has that information.
+
+```{r, eval=F, echo=T}
+mapacalor1 <- mapacalor |> 
+  mutate(minuto = round(timestamp/60000
+))
+
+
+class(mapacalor1$minuto)
+
+breaks <- c(seq(0, 60, by = 5))
+
+labels <- seq(5, 60, by = 5)
+
+
+mapacalor1$minute_interval <- cut(mapacalor1$minuto, breaks = breaks, labels = labels)
+mapacalor1$minute_interval[is.na(mapacalor1$minute_interval)] <- 60
+
+
+mapacalor1$minute_interval <- as.numeric(as.character(mapacalor1$minute_interval)) 
+
+mapacalor1$minute_interval <- (mapacalor1$minute_interval *5)
+
+
+img <- readJPEG("riotmap2.jpg")
+
+ggplot(mapacalor1, aes(mapacalor1$position$x, y = mapacalor1$position$y))+
+  background_image(img) +
+  stat_density_2d(
+    geom = "raster",
+    aes(fill = after_stat(density)),
+    contour = FALSE,
+  ) +
+  scale_fill_gradient(low = "transparent", high = "red")  + 
+  theme_void() +
+  theme(legend.position = "none") + transition_time(minute_interval) +
+  labs(title = "Minute: {frame_time}")
+
+
+
+
+plot_heatmap <- function(minute_interval) {
+  ggplot(mapacalor1 |>  filter(minute_interval == minute_interval), 
+         aes(mapacalor1$position$x, y = mapacalor1$position$y)) +
+    background_image(img) +
+    stat_density_2d(
+      geom = "raster",
+      aes(fill = after_stat(density)),
+      contour = FALSE
+    ) +
+    scale_fill_gradient(low = "transparent", high = "red") +
+    theme_void() +
+    theme(legend.position = "none") +
+    labs(title = paste("Minute Interval:", minute_interval))
+}
+
+plot_heatmap(5)
+
+plot_heatmap(25)
+
+table(mapacalor1$minute_interval)
+
+mapacalor2 <- mapacalor1 |> filter(
+  minute_interval < 45
+)
+
+
+ggplot(mapacalor2, aes(mapacalor2$position$x, y = mapacalor2$position$y))+
+  background_image(img) +
+  stat_density_2d(
+    geom = "raster", 
+    aes(fill = after_stat(density)),
+    contour = FALSE,
+  ) +
+  scale_fill_gradient(low = "transparent", high = "red")  +
+  theme_void() +
+  theme(legend.position = "none") + transition_time(minute_interval) +
+  labs(title = "Minute: {frame_time}")
+
+ggplot(mapacalor2, aes(mapacalor2$position$x, y = mapacalor2$position$y))+
+  background_image(img) +
+  stat_density_2d(
+    geom = "tile",
+    aes(fill = after_stat(density)),
+    contour = FALSE,
+  ) +
+  scale_fill_gradient(low = "transparent", high = "red")  + 
+  theme_void() +
+  theme(legend.position = "none") + facet_wrap(~minute_interval)
+
+```
+
+
+Although the code is not ran in this case, we will explain it briefly. The idea is to plot a density plot that shows the evolution throughout the game, one of the main issues we found is that the stat_density_2d in ggplot2 with gganimate does not take into account the different minute intervals as "unique" in the sense that the strength of the density is taken in general rather than in those specific interval times, for that matter, if we plot the map as a background the color starts to disappear in later stages of the game as there are fewer deaths and is comparing to the general density at any point in time. That is to say, even though there are 100 deaths in minute 40, for example, the strength of the density shown is taking into account the 10000 deaths for that matter the 100 deaths will show really small or not nearly visible in the red gradient.
+
+As a way to fight this issue that happens in ggplot2 more specifically in stat_density_2d trying to do facet_wrap does not solve the issue, but filtering the data and then plotting as we did the function and then showing which minute interval we want it kinda solves that problem although we lose the animation. Another fix we did is removing the background map and being white as a way to spot the density when it is low in later minutes of the game.
+
+![](redmap.gif)
+
+![](blankmap.gif)
+
+
+## Replication of Player Statistics - LeagueOfGraphs
+
+In this case, the idea of this section outside of getting general information of matches across ranks, is to find information about specific users.
+
+In this case, our accounts are [Zenki#1310](https://www.leagueofgraphs.com/es/summoner/euw/Zenki-1310) and [ShakadeVirgo07#EUW](https://www.leagueofgraphs.com/es/summoner/euw/ShakadeVirgo07-EUW) as seen in the LeagueOfGraphs webpage, information about our recent games, overall results among other information available.
+
+At first we did a function to get, recent games, results of our most played champions, winrate by role and winrate per day of the week information that we can see in the links above.
+
+
+All the functions follow the same structure/idea, the reason we start from the beginning is to create a package or that we do not need to call any previous function or code previously done in the project.
+
+The idea is that we have four different functions:
+
+* opgg_recent_matches = get 10 latest match
+
+* opgg_kda = get information about most played champions
+
+* opgg_role = get information about stats regarding the role played in the games
+
+* opgg_weekwr = get information of winrate per day of the week
+
+
+The idea is to call the function and add the following data (name, tagline, key).
+Taking into account the usernames of our own accounts:
+Zenki#1310 would be name = Zenki, tagline = 1310, and add the key.
+Shakadevirgo07#EUW would be name = ShakadeVirgo0, tagline = EUW and add the key.
+
+The default tagline is EUW for EUW region, but can be changed as there can are many cases in which people have the same name. In that matter either numbers or any combination of letters can be in the tagline.
+
+
+```{r}
+opgg_recent_matches <- function(name, tagline, key) {
+  
+    riot_api_fetching <- function(x) {
+      url <- paste0(x, key)
+      json <- GET(url = url)
+      raw <- rawToChar(json$content)
+      fromJSON(raw)
+    }
+    
+    
+    delimiter <- "?api_key="
+    delimiter2 <- "&api_key="
+    
+    userid <- riot_api_fetching(paste0("https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/", name, "/", tagline, delimiter))
+    
+    puuid_user <- userid$puuid
+    
+    queue <- "420"
+    start <- "0"
+    count <- "100"
+    
+    matchestotal_user <- lapply(puuid_user, function(x) {
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      
+      matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", puuid_user, "/ids?","/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+      
+      Sys.sleep(1.3)
+      return(matches)
+    }) 
+    
+    
+    
+    matchestotal_user_unlisted <- unlist(matchestotal_user)
+    
+    counter <- 0
+    
+    matchestotal_user_unlisted_combined <- lapply(matchestotal_user_unlisted, function(x) {
+      
+      counter <<- counter +1
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+      
+      
+      if (counter %% 10 == 0) {
+        print(paste(counter, "/", length(matchestotal_user_unlisted), "@", format(Sys.time(), "%H:%M:%S")))
+      }
+      
+      if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+        infomatch <- apibranch$info$participants
+        parts <- apibranch$metadata$participants
+        bind1 <- cbind(infomatch,parts)
+        duration <- apibranch$info$gameDuration
+        bind2 <- cbind(duration, bind1)
+        euwmatch <- apibranch$metadata$matchId 
+        bind3 <- cbind(euwmatch,bind2)
+        gameCreation <- apibranch$info$gameCreation
+        bind4 <- cbind(gameCreation, bind3)
+        Sys.sleep(1.4)
+        return(bind4)
+      } else {
+        return(NULL) 
+      }
+    })
+    
+    
+    matchestotal_user_unlisted_combined_df <- bind_rows(matchestotal_user_unlisted_combined)
+    
+  
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |>
+      filter(puuid == puuid_user)
+    
+    recent_games <- matchestotal_user_unlisted_combined_df_byuser  |>  
+      slice_head(n = 10)  |>  
+      mutate(KDA = round(((kills + assists) / deaths), 2)) |> 
+      mutate(KDA = ifelse(is.na((kills + assists) / deaths), "Perfect", round((kills + assists) / deaths,   2))) |> 
+      mutate(duration_min = round(duration/60)) |> 
+      mutate(cs = totalAllyJungleMinionsKilled + totalMinionsKilled + totalEnemyJungleMinionsKilled) |> 
+      mutate(cs_min = cs/(round(duration/60))) |> 
+      mutate(game_result = ifelse(win == TRUE &  duration > 5, "Victory", ifelse(duration < 5, "Remake", "Defeat"))) |> 
+      select(championName, kills, deaths, assists, cs_min, duration_min, KDA, game_result)
+  
+  return(recent_games)
+}
+
+
+opgg_recent_matches("Zenki", "1310", "RGAPI-8e3a4174-deeb-4036-8625-7c8d6d7e042a")
+```
+
+```{r}
+
+opgg_kda <- function(name, tagline, key) {
+  
+riot_api_fetching <- function(x) {
+      url <- paste0(x, key)
+      json <- GET(url = url)
+      raw <- rawToChar(json$content)
+      fromJSON(raw)
+    }
+    
+    
+    delimiter <- "?api_key="
+    delimiter2 <- "&api_key="
+    
+    userid <- riot_api_fetching(paste0("https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/", name, "/", tagline, delimiter))
+    
+    puuid_user <- userid$puuid
+    
+    queue <- "420"
+    start <- "0"
+    count <- "100"
+    
+    matchestotal_user <- lapply(puuid_user, function(x) {
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      
+      matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", puuid_user, "/ids?","/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+      
+      Sys.sleep(1.3)
+      return(matches)
+    }) 
+    
+    
+    
+    matchestotal_user_unlisted <- unlist(matchestotal_user)
+    
+    counter <- 0
+    
+    matchestotal_user_unlisted_combined <- lapply(matchestotal_user_unlisted, function(x) {
+      
+      counter <<- counter +1
+      
+      if (nchar(x) == 0) {
+        return(NULL) 
+      }
+      
+      apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+      
+      
+      if (counter %% 10 == 0) {
+        print(paste(counter, "/", length(matchestotal_user_unlisted), "@", format(Sys.time(), "%H:%M:%S")))
+      }
+      
+      if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+        infomatch <- apibranch$info$participants
+        parts <- apibranch$metadata$participants
+        bind1 <- cbind(infomatch,parts)
+        duration <- apibranch$info$gameDuration
+        bind2 <- cbind(duration, bind1)
+        euwmatch <- apibranch$metadata$matchId 
+        bind3 <- cbind(euwmatch,bind2)
+        gameCreation <- apibranch$info$gameCreation
+        bind4 <- cbind(gameCreation, bind3)
+        Sys.sleep(1.4)
+        return(bind4)
+      } else {
+        return(NULL)  
+      }
+    })
+    
+    
+    matchestotal_user_unlisted_combined_df <- bind_rows(matchestotal_user_unlisted_combined)
+    
+  
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |>
+      filter(puuid == puuid_user)
+
+
+
+kda_per_champion <- matchestotal_user_unlisted_combined_df_byuser |> 
+  group_by(championName) |> 
+  summarise(
+    kills = round(mean(kills), 2),
+    deaths = round(mean(deaths), 2),
+    assists = round(mean(assists), 2),
+    KDA = ifelse(deaths == 0, NA, round((kills + assists) / deaths, 2)),
+    N_of_Games = n(),
+    winrate = paste0(round((mean(win) * 100)), "%")
+  ) |> 
+  arrange(desc(N_of_Games)) |> 
+  slice_head(n=5) |> 
+  select(championName,KDA, winrate, N_of_Games)
+
+  
+  
+  
+  return(kda_per_champion)
+}
+
+
+opgg_kda("Shakadevirgo07", "EUW", "RGAPI-8e3a4174-deeb-4036-8625-7c8d6d7e042a")
+```
+
+
+```{r}
+
+opgg_role <- function(name, tagline, key) {
+  
+riot_api_fetching <- function(x) {
+      url <- paste0(x, key)
+      json <- GET(url = url)
+      raw <- rawToChar(json$content)
+      fromJSON(raw)
+    }
+    
+    
+    delimiter <- "?api_key="
+    delimiter2 <- "&api_key="
+    
+    userid <- riot_api_fetching(paste0("https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/", name, "/", tagline, delimiter))
+    
+    puuid_user <- userid$puuid
+    
+    queue <- "420"
+    start <- "0"
+    count <- "100"
+    
+    matchestotal_user <- lapply(puuid_user, function(x) {
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      
+      matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", puuid_user, "/ids?","/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+      
+      Sys.sleep(1.3)
+      return(matches)
+    }) 
+    
+    
+    
+    matchestotal_user_unlisted <- unlist(matchestotal_user)
+    
+    counter <- 0
+    
+    matchestotal_user_unlisted_combined <- lapply(matchestotal_user_unlisted, function(x) {
+      
+      counter <<- counter +1
+      
+      if (nchar(x) == 0) {
+        return(NULL)
+      }
+      
+      apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+      
+      
+      if (counter %% 10 == 0) {
+        print(paste(counter, "/", length(matchestotal_user_unlisted), "@", format(Sys.time(), "%H:%M:%S")))
+      }
+      
+      if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+        infomatch <- apibranch$info$participants
+        parts <- apibranch$metadata$participants
+        bind1 <- cbind(infomatch,parts)
+        duration <- apibranch$info$gameDuration
+        bind2 <- cbind(duration, bind1)
+        euwmatch <- apibranch$metadata$matchId 
+        bind3 <- cbind(euwmatch,bind2)
+        gameCreation <- apibranch$info$gameCreation
+        bind4 <- cbind(gameCreation, bind3)
+        Sys.sleep(1.4)
+        return(bind4)
+      } else {
+        return(NULL) 
+      }
+    })
+    
+    
+    matchestotal_user_unlisted_combined_df <- bind_rows(matchestotal_user_unlisted_combined)
+    
+  
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |>
+      filter(puuid == puuid_user)
+
+
+
+plays_by_role <- matchestotal_user_unlisted_combined_df_byuser  |> 
+  group_by(teamPosition) |> 
+  summarise(
+    kills = round(mean(kills), 2),
+    deaths = round(mean(deaths), 2),
+    assists = round(mean(assists), 2),
+    KDA = ifelse(deaths == 0, NA, round((kills + assists) / deaths, 2)),
+    N_of_Games = n(),
+    winrate = paste0(round((mean(win) * 100)), "%")
+  ) |> 
+  arrange(desc(N_of_Games)) |> 
+  slice_head(n=5) |> 
+  mutate(teamPosition = ifelse(teamPosition == "", "SUPPORT", teamPosition)) |> 
+  select(teamPosition,KDA, winrate, N_of_Games)
+
+  
+  
+  
+  return(plays_by_role)
+}
+
+
+opgg_role("Shakadevirgo07", "EUW", "RGAPI-8e3a4174-deeb-4036-8625-7c8d6d7e042a")
+```
+
+```{r}
+
+
+opgg_weekwr <- function(name, tagline, key) {
+  
+riot_api_fetching <- function(x) {
+      url <- paste0(x, key)
+      json <- GET(url = url)
+      raw <- rawToChar(json$content)
+      fromJSON(raw)
+    }
+    
+    
+    delimiter <- "?api_key="
+    delimiter2 <- "&api_key="
+    
+    userid <- riot_api_fetching(paste0("https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/", name, "/", tagline, delimiter))
+    
+    puuid_user <- userid$puuid
+    
+    queue <- "420"
+    start <- "0"
+    count <- "100"
+    
+    matchestotal_user <- lapply(puuid_user, function(x) {
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      
+      matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", puuid_user, "/ids?","/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+      
+      Sys.sleep(1.3)
+      return(matches)
+    }) 
+    
+    
+    
+    matchestotal_user_unlisted <- unlist(matchestotal_user)
+    
+    counter <- 0
+    
+    matchestotal_user_unlisted_combined <- lapply(matchestotal_user_unlisted, function(x) {
+      
+      counter <<- counter +1
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+      
+      
+      if (counter %% 10 == 0) {
+        print(paste(counter, "/", length(matchestotal_user_unlisted), "@", format(Sys.time(), "%H:%M:%S")))
+      }
+      
+      if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+        infomatch <- apibranch$info$participants
+        parts <- apibranch$metadata$participants
+        bind1 <- cbind(infomatch,parts)
+        duration <- apibranch$info$gameDuration
+        bind2 <- cbind(duration, bind1)
+        euwmatch <- apibranch$metadata$matchId 
+        bind3 <- cbind(euwmatch,bind2)
+        gameCreation <- apibranch$info$gameCreation
+        bind4 <- cbind(gameCreation, bind3)
+        Sys.sleep(1.4)
+        return(bind4)
+      } else {
+        return(NULL)  
+      }
+    })
+    
+    
+    matchestotal_user_unlisted_combined_df <- bind_rows(matchestotal_user_unlisted_combined)
+    
+  
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |> 
+      filter(puuid == puuid_user)
+
+winrate_dayweek <- matchestotal_user_unlisted_combined_df_byuser |> 
+  mutate(Date = as.POSIXct(gameCreation / 1000, origin = "1970-01-01")) |> 
+  group_by(day = str_to_title(wday(Date, label = TRUE, abbr = FALSE))) |> 
+  summarize(winrate = paste0(round(mean(win) * 100), "%")) |> 
+  arrange(match(day, c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) |> 
+  select(day, winrate)
+
+  
+  
+  
+  return(winrate_dayweek)
+}
+
+
+opgg_weekwr("Shakadevirgo07", "EUW", "RGAPI-8e3a4174-deeb-4036-8625-7c8d6d7e042a")
+```
+
+
+
+## Shinny App
+
+Although the Rmd will not run the app, it is an explanation and to show the idea of the code following the previous functions created. 
+
+The app can be accessed in this [link](https://bbanyulsuc3m.shinyapps.io/OPGG/). The reason why it is called OPGG is that it simulates the already existing webpage similar to LeagueOfGraphs, the also well-known [OP.GG](https://www.op.gg/).
+
+It is important to notice that it will take some time to load as it is getting information of the last 100 matches, to change the number of matches change the code in the app that would be in the server side count <- "100, the main reason we decided to not put it as a variable in the function is to get the overall information of the user. It takes around three minutes to load.
+
+Another app will be created in which we do not have to put an API key in order to run it in the presentation day in class to make it fast and easy to show the app.
+
+The app shows the dataframes obtained in the previous functions although the last two are shown in a barplot as they represent winrate.
+
+
+```{r, eval=F, echo=T}
+
+library(shiny)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+
+
+
+ui <- fluidPage(
+  tags$head(
+    tags$style(
+      HTML("
+        /* Custom CSS */
+        .custom-title {
+          text-align: center;
+          margin-bottom: 20px;
+        }
+        body {
+          background-color: #f0f8ff; /* Light blue background */
+        }
+      ")
+    )
+  ),
+  div(class = "custom-title",
+      h1("League of Data Harvesting")
+  ),
+  sidebarLayout(
+    sidebarPanel(
+      textInput("name", "Enter name:"),
+      textInput("tagline", "Enter tagline:"),
+      textInput("key", "Enter API key:"),
+      actionButton("submit", "Submit"),
+      verbatimTextOutput("counter_text")
+    ),
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Recent Games", tableOutput("recent_games")),
+        tabPanel("KDA per Champion", tableOutput("kda_per_champion")),
+        tabPanel("Winrate by Role", plotOutput("plays_by_role")),
+        tabPanel("Winrate by Day of the Week", plotOutput("winrate_dayweek"))
+      )
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output) {
+  
+  library(shiny)
+  library(httr)
+  library(jsonlite)
+  library(dplyr)
+  library(stringr)
+  library(lubridate)
+  library(ggplot2)
+  
+  observeEvent(input$submit, {
+    req(input$name, input$tagline, input$key)
+    
+    # Function to fetch data from Riot API
+    riot_api_fetching <- function(x) {
+      url <- paste0(x, input$key)
+      json <- GET(url = url)
+      raw <- rawToChar(json$content)
+      fromJSON(raw)
+    }
+    
+    
+    delimiter <- "?api_key="
+    delimiter2 <- "&api_key="
+    
+    userid <- riot_api_fetching(paste0("https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/", input$name, "/", input$tagline, delimiter))
+    
+    puuid_user <- userid$puuid
+    
+    queue <- "420"
+    start <- "0"
+    count <- "100"
+    
+    matchestotal_user <- lapply(puuid_user, function(x) {
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      
+      matches <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/", puuid_user, "/ids?","/ids?queue=", queue, "&start=", start, "&count=", count, delimiter2))
+      
+      Sys.sleep(1.3)
+      return(matches)
+    }) 
+    
+    
+    
+    matchestotal_user_unlisted <- unlist(matchestotal_user)
+    
+    counter <- 0
+    
+    matchestotal_user_unlisted_combined <- lapply(matchestotal_user_unlisted, function(x) {
+      
+      counter <<- counter +1
+      
+      if (nchar(x) == 0) {
+        return(NULL)  
+      }
+      
+      apibranch <- riot_api_fetching(paste0("https://europe.api.riotgames.com/lol/match/v5/matches/", x, delimiter))
+      
+      
+      if (counter %% 10 == 0) {
+        print(paste(counter, "/", length(matchestotal_user_unlisted), "@", format(Sys.time(), "%H:%M:%S")))
+      }
+      
+      if (!is.null(apibranch$info$gameDuration) && apibranch$info$gameDuration != 0) {
+        infomatch <- apibranch$info$participants
+        parts <- apibranch$metadata$participants
+        bind1 <- cbind(infomatch,parts)
+        duration <- apibranch$info$gameDuration
+        bind2 <- cbind(duration, bind1)
+        euwmatch <- apibranch$metadata$matchId 
+        bind3 <- cbind(euwmatch,bind2)
+        gameCreation <- apibranch$info$gameCreation
+        bind4 <- cbind(gameCreation, bind3)
+        Sys.sleep(1.4)
+        return(bind4)
+      } else {
+        return(NULL)  
+      }
+    })
+    
+    
+    matchestotal_user_unlisted_combined_df <- bind_rows(matchestotal_user_unlisted_combined)
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |> 
+      filter(puuid == puuid_user) |> 
+      rename(Champion = championName)
+    
+    
+    
+    matchestotal_user_unlisted_combined_df_byuser <- matchestotal_user_unlisted_combined_df |> 
+      filter(puuid == puuid_user)
+    
+    recent_games <- matchestotal_user_unlisted_combined_df_byuser  |>  
+      slice_head(n = 10)  |>  
+      mutate(KDA = round(((kills + assists) / deaths), 2)) |> 
+      mutate(KDA = ifelse(is.na((kills + assists) / deaths), "Perfect", round((kills + assists) / deaths,   2))) |> 
+      mutate(duration_min = round(duration/60)) |> 
+      mutate(cs = totalAllyJungleMinionsKilled + totalMinionsKilled + totalEnemyJungleMinionsKilled) |> 
+      mutate(cs_min = cs/(round(duration/60))) |> 
+      mutate(game_result = ifelse(win == TRUE &  duration > 5, "Victory", ifelse(duration < 5, "Remake", "Defeat"))) |> 
+      select(championName, kills, deaths, assists, cs_min, duration_min, KDA, game_result)
+    
+    kda_per_champion <- matchestotal_user_unlisted_combined_df_byuser |>
+      group_by(championName) |>
+      summarise(
+        kills = round(mean(kills), 2),
+        deaths = round(mean(deaths), 2),
+        assists = round(mean(assists), 2),
+        KDA = ifelse(deaths == 0, NA, round((kills + assists) / deaths, 2)),
+        N_of_Games = n(),
+        winrate = paste0(round((mean(win) * 100)), "%")
+      ) |> 
+      arrange(desc(N_of_Games)) |> 
+      slice_head(n=5) |> 
+      select(championName,KDA, winrate, N_of_Games)
+    
+    plays_by_role <- matchestotal_user_unlisted_combined_df_byuser  |>
+      group_by(teamPosition) |> 
+      summarise(
+        kills = round(mean(kills), 2),
+        deaths = round(mean(deaths), 2),
+        assists = round(mean(assists), 2),
+        KDA = ifelse(deaths == 0, NA, round((kills + assists) / deaths, 2)),
+        N_of_Games = n(),
+        winrate = paste0(round((mean(win) * 100)), "%")
+      ) |> 
+      arrange(desc(N_of_Games)) |> 
+      slice_head(n=5) |> 
+      mutate(teamPosition = ifelse(teamPosition == "", "SUPPORT", teamPosition)) |>
+      select(teamPosition,KDA, winrate, N_of_Games)
+    
+    winrate_dayweek <- matchestotal_user_unlisted_combined_df_byuser |>
+      mutate(Date = as.POSIXct(gameCreation / 1000, origin = "1970-01-01")) |>
+      group_by(day = str_to_title(wday(Date, label = TRUE, abbr = FALSE))) |>
+      summarize(winrate = paste0(round(mean(win) * 100), "%")) |>
+      arrange(match(day, c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))|>
+      select(day, winrate)
+    
+    all_roles <- c("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT")
+    
+    plays_by_role$teamPosition <- factor(plays_by_role$teamPosition, 
+                                         levels = all_roles)
+    
+    rol_ggplot <- ggplot(plays_by_role, aes(x = teamPosition, y = winrate)) +
+      geom_bar(stat = "identity", fill = "darkgreen", color = "darkgreen",alpha=0.2) +
+      geom_text(aes(label = paste0("[",KDA," (KDA) - ", N_of_Games, " Games]" )), vjust = -0.5, color = "black", size = 4.5) +
+      labs(title = "Winrate and Average KDA by role",
+           y = "",
+           x = "") +
+      theme_classic() +
+      geom_hline(yintercept = 50, linetype = "dashed", color = "darkgreen") + 
+      theme(axis.text.x = element_text(color="black", size=10)) +
+      theme(axis.text.y = element_text(color="black", size=10))
+    
+    
+    all_days <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    
+    
+    winrate_dayweek$day <- factor(winrate_dayweek$day, 
+                                         levels = all_days)
+    
+    winrate_dayweek_ggplot <- ggplot(winrate_dayweek, aes(x = day, y = winrate))  +
+      geom_bar(stat = "identity", fill = "darkgreen", color = "darkgreen",alpha=0.2) +
+      labs(title = "Winrate by day of the week",
+           y = "",
+           x = "") +
+      theme_classic() +
+      geom_hline(yintercept = 50, linetype = "dashed", color = "darkgreen") + 
+      theme(axis.text.x = element_text(color="black", size=10)) +
+      theme(axis.text.y = element_text(color="black", size=10))
+    
+    output$recent_games <- renderTable(recent_games)
+    output$kda_per_champion <- renderTable(kda_per_champion)
+    output$plays_by_role <- renderPlot(rol_ggplot)
+    output$winrate_dayweek <- renderPlot(winrate_dayweek_ggplot) 
+  
+  })
+}
+ 
+# Run the Shiny app
+shinyApp(ui = ui, server = server)
+
+```
+
