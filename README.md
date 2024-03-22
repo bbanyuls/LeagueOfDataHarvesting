@@ -13,3 +13,9 @@ Although in the files there are some functions created to analyze particular pla
 # API Key
 As we only have access to a Personal API Key, anyone who wants to use the app or replicate the code  must get their own key to use the app in the [Riot Developer Portal](https://developer.riotgames.com/). 
 The data of the match history and general statistics of the user may take some time as Personal API Keys are limited to 100 requests every two minutes. Regarding getting information on thousands of matches in the general code, it may even take hours for that matter the number of matches obtained in the project is small to ensure the replicability is fast and shows what it does.
+
+# Links of interest for the presentation
+
+1) [APP Shiny No Key](https://bbanyulsuc3m.shinyapps.io/OPGGNOKEY/)
+2) [OP.GG](https://www.op.gg/summoners/euw/Noah7-Euw2)
+3) [LOL Analytics](https://lolalytics.com/lol/sylas/build/)
